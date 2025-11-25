@@ -23,26 +23,33 @@ func exportCmd() *cobra.Command {
 				return err
 			}
 
-			// Initialize vault manager and sync (like other commands)
-			vman, err := vault.New(projectCfg.VaultRepo)
-			if err != nil {
-				return err
+			// Try fast fetch first
+			fs := store.NewFast(projectCfg.VaultRepo)
+			all, err := fs.All()
+			if err != nil && verbose {
+				fmt.Printf("⚠️  Fast fetch failed (%v), falling back to git clone...\n", err)
 			}
 
-			defer vman.Cleanup()
-
-			if err := vman.Sync(); err != nil {
-				return err
-			}
-
-			// Create store instance
-			encPath := filepath.Join(vman.WorkDir, "repo", "secrets.enc.yaml")
-			s := store.New(encPath)
-
-			// Get all secrets
-			all, err := s.All()
+			// Fallback to traditional method if fast fetch fails
 			if err != nil {
-				return err
+				vman, err := vault.New(projectCfg.VaultRepo)
+				if err != nil {
+					return err
+				}
+				vman.Verbose = verbose
+
+				defer vman.Cleanup()
+
+				if err := vman.Sync(); err != nil {
+					return err
+				}
+
+				encPath := filepath.Join(vman.WorkDir, "repo", "secrets.enc.yaml")
+				s := store.New(encPath)
+				all, err = s.All()
+				if err != nil {
+					return err
+				}
 			}
 
 			if asJSON {
@@ -65,7 +72,14 @@ func exportCmd() *cobra.Command {
 			}
 
 			// Export as .env format
-			envOutput, err := s.ExportEnv()
+			var envOutput string
+			if fs != nil {
+				envOutput, err = fs.ExportEnv()
+			} else {
+				// This shouldn't happen given the fallback above, but just in case
+				return fmt.Errorf("no store available")
+			}
+
 			if err != nil {
 				return err
 			}
