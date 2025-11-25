@@ -1,7 +1,11 @@
 package main
 
-import "github.com/yourname/yoink/cmd"
+import (
+	"github.com/jack-kitto/yoink/cmd"
+)
+
+var version = "dev"
 
 func main() {
-	cmd.Execute()
+	cmd.Execute(version)
 }
