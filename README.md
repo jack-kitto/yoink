@@ -1,353 +1,188 @@
-# Yoink
+# 🧩 Yoink — Git-Native Secret Manager (MVP)
 
-> **Yoink — a Git‑native, zero‑infrastructure secret manager for developers and teams.**  
-> Secure secrets live alongside your code — encrypted, versioned, and shared through GitHub.
+> **“GitOps‑style secrets, locally encrypted, globally invisible.”**
 
----
-
-### 📦 Current Release Status
-
-| Area                                            | Status                                |
-| ----------------------------------------------- | ------------------------------------- |
-| Init & setup (`init`, `vault-init`)             | ✅ Working                            |
-| Manage secrets (`set`, `get`, `delete`, `list`) | ✅ Working                            |
-| Runtime injection (`run`)                       | ✅ Working                            |
-| Vault workspace & cleanup                       | ✅ Working                            |
-| Export secrets (`export`)                       | ⚠️ Bug: causes crash, fix in progress |
-| Hide Git logs                                   | 🔜 Pending                            |
-| Fast `curl`‑based reads                         | 🔜 Planned                            |
-| Multi‑device key sync                           | 🔜 Planned                            |
-| GitHub Actions secrets sync                     | 🔜 Planned                            |
-| `yoink audit` — vault history + pending PRs     | 🔜 Planned                            |
-| TUI / Web UI                                    | 🧪 Research phase                     |
-| Cloud Yoink (GitHub App integration)            | 🧩 Long‑term roadmap                  |
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+![SOPS](https://img.shields.io/badge/SOPS-Mozilla-blue.svg)
+![Age](https://img.shields.io/badge/Age-Encryption-green.svg)
+![GitHub](https://img.shields.io/badge/GitHub‑Backend-Enabled-purple.svg)
 
 ---
 
-## 🧠 What Yoink Is
+## ⚡ Overview
 
-Yoink is a **Git‑backed secret manager** that uses GitHub as its encrypted vault — but hides all the Git.
+**Yoink** is a lightweight, proof‑of‑concept secret manager that uses **SOPS** + **Age** for encryption and **GitHub** as a decentralized backend vault.
 
-It combines:
+It’s a command‑line tool that makes secrets feel _invisible yet always available_ — no manual git merges, no cloud dependence, just instant, versioned, encrypted configuration.
 
-- [Mozilla SOPS](https://github.com/mozilla/sops): Encryption engine
-- [Age](https://age-encryption.org/): Key management
-- [GitHub](https://github.com/): Distribution, access control & audit trail
-
-No backend, no sync conflicts, no manual merges — just automatic, reliable secret operations.
+This version is a **vibe‑coded, MVP‑level experiment** designed to explore how a truly Git‑native, pull‑request‑based secret management system could feel in practice.
 
 ---
 
-## 🔧 Requirements
+## ✨ Highlights & Current Features
 
-Install dependencies:
+Everything below is **working** in the current build.
 
-```bash
-brew install sops age gh git
-gh auth login
+### 🔐 Core Vault Management
+
+- Encrypted secrets managed with **SOPS** and **Age**
+- Per‑project vault initialized with `yoink vault-init`
+- GitHub repository automatically used as secure backend
+- Project config stored in `.yoink.yaml`
+- Built-in **audit**, **status**, and **debug** commands
+
+### ⚡ Performance & Developer Experience
+
+- **Fast HTTPS fetch mode** for read-only operations (`get`, `list`, `export`, `run`)  
+  → Decrypts locally using SOPS without full git clone
+- **Quiet Git operations by default** — no verbose logs unless `--verbose` is passed
+- **Faster exports** and zero local-state dependencies
+- Support for `--dry-run` across most commands
+
+### 🔁 Key Management
+
+- **`yoink key-sync`** — backup and restore your Age key using a **private GitHub repo**:
+  - `yoink key-sync setup` → creates a `username/yoink-keys` repository
+  - `yoink key-sync push` → encrypts and backs up your key
+  - `yoink key-sync pull` → restores your key securely to a new machine
+  - Simple XOR+Base64 obfuscation for backup; private repos enforced
+
+### 🧠 Diagnostics & Visibility
+
+- **`yoink status`**: checks all dependencies, Age key, config, vault access, and GitHub auth
+- **`yoink audit`**: lists recent vault commits and pull requests with clean formatting
+- **`yoink debug`**: shows repo and file information for troubleshooting
+
+### 🚀 Developer UX
+
+- Machine-friendly JSON output mode (`--json`)
+- Emoji-based lightweight summaries for clarity
+- Consistent help and flag usage through Cobra
+- Safe by default — never exposes plaintext secrets
+
+---
+
+## 💡 Architecture
+
+```
+┌───────────────┐    ┌──────────────────┐    ┌──────────────────┐
+│   Developer   │───▶│  Yoink CLI (SOPS)│───▶│   GitHub Vault   │
+│ (local env)   │    │ (Encrypt/Decrypt)│    │ (Encrypted store)│
+└───────────────┘    └──────────────────┘    └──────────────────┘
 ```
 
-Yoink requires:
+---
 
-- `sops` – encryption/decryption
-- `age` – key generation and decryption
-- `gh` – GitHub CLI for pull requests
-- `git` – for committing updates (hidden from the user)
+## 🧰 Commands Overview
+
+| Command                         | Description                                  |
+| ------------------------------- | -------------------------------------------- |
+| `yoink init`                    | Initialize global configuration              |
+| `yoink vault-init`              | Initialize per-project vault                 |
+| `yoink set <key> <value>`       | Add or update a secret (creates PR)          |
+| `yoink get <key>`               | Retrieve and decrypt a single secret         |
+| `yoink list`                    | List all available secret keys               |
+| `yoink export`                  | Export secrets as `.env` or JSON             |
+| `yoink run -- <cmd>`            | Run arbitrary commands with injected secrets |
+| `yoink audit`                   | Show vault history and open PRs              |
+| `yoink status`                  | Perform a full diagnostic check              |
+| `yoink key-sync`                | Setup, backup, and restore Age keys          |
+| `yoink onboard` / `remove-user` | Manage team access keys                      |
+| `yoink debug`                   | Inspect vault repo and metadata              |
 
 ---
 
-## 🚀 Quick Start (Current Functionality)
-
-### 1. Initialize Yoink Globally
+## 🔧 Installation
 
 ```bash
 go install github.com/jack-kitto/yoink@latest
-yoink init
 ```
 
-Creates:
+Or run locally during development:
 
-- `~/.config/yoink/config.yaml`
-- `~/.config/yoink/age.{key,pub}`
+```bash
+make build
+./yoink version
+```
 
 ---
 
-### 2. Initialize a Project Vault
+## 🧩 Current State — Proof of Concept (MVP)
 
-```bash
-cd my-project
-yoink vault-init
-```
+This project was **vibe-coded** as a minimal, working proof of concept — its purpose is to test and validate the **“invisible Git vault”** idea rather than achieve production-level polish.
 
-Creates a dedicated GitHub repository (e.g., `my-project-vault`),
-sets up `.yoink.yaml`, `.sops.yaml`, and `.gitignore`.
+### Goals Achieved ✅
 
-This vault securely holds encrypted secrets.
+- Working CLI for all CRUD operations
+- Fast HTTPS mode (no full repo syncs required for reads)
+- Key sync / backup working via GitHub private repos
+- Stable `.env` and JSON export
+- Robust, quiet git subprocess handling
 
----
+### Known Limitations ⚠️
 
-### 3. Add and Retrieve Secrets
-
-```bash
-yoink set API_KEY "super-secret"
-yoink get API_KEY
-yoink list
-```
-
-Each `set` automatically:
-
-- Encrypts your value with Age & SOPS
-- Commits the change
-- Creates a GitHub Pull Request (PR)
-- Cleans up the temp clone
-
-“Fetch” commands (`get`, `list`) always read the latest truth directly from the vault — no local workspace to sync.
+- Not optimized for large vaults (due to SOPS runtime cost)
+- Limited authentication modes (currently GitHub CLI only)
+- Key sync obfuscation is **not strong encryption** (safe only for private repos)
+- No TUI or web interface yet
 
 ---
 
-### 4. Inject Secrets at Runtime
+## 🛣️ Future Exploration
 
-```bash
-yoink run -- ./deploy.sh
-yoink run -- docker-compose up
-yoink run -- npm start
-```
+Yoink was inspired by [authetoan/gitops-secret-manager-bridge](https://github.com/authetoan/gitops-secret-manager-bridge), bringing that idea into a lightweight, zero-config developer UX.
 
-`yoink run` decrypts secrets temporarily, exports them as environment variables, executes your command, and cleans up.  
-Vault clones reside briefly under `~/.config/yoink/vaults/` and are deleted automatically after use.
+Ideas for future exploration:
+
+- 🔧 **Integrate into existing projects** as a drop‑in secrets backend
+- ☁️ Support for other Git providers (GitLab, Bitbucket)
+- 🧑💻 TUI mode using Bubbletea for local secret browsing
+- 🌐 Web dashboard via `yoink serve`
+- ⚙️ GitHub Actions workflow generator (`yoink actions generate`)
+- 🪄 Optional Age key cloud sync via GitHub App or GPG fallback
 
 ---
 
-### 5. Export Secrets (⚠️ Known bug)
+## 🧪 Example Developer Workflow
 
 ```bash
+# Initialize once
+yoink init && yoink vault-init
+
+# Add a secret (creates PR)
+yoink set DATABASE_URL postgres://user:pass@db.example.com
+
+# View or export locally
+yoink get DATABASE_URL
 yoink export --env-file .env
-yoink export --json > secrets.json
-```
 
-Currently causes a nil pointer panic (to be fixed in next release).
+# Run with injected environment
+yoink run -- npm run dev
 
----
-
-### 6. Collaborate with Team Members
-
-**Grant access:**
-
-```bash
-yoink onboard
-```
-
-Creates a PR adding your public key to the vault’s `.sops.yaml`.
-
-**Revoke access:**
-
-```bash
-yoink remove-user age1abc...
-```
-
-Creates a PR removing a user’s access key.
-
-Once merged, everyone with access can run:
-
-```bash
-yoink get SECRET
-yoink run -- npm start
+# Backup keys
+yoink key-sync setup
+yoink key-sync push
 ```
 
 ---
 
-## 🧭 Design Philosophy
+## 🧠 Inspiration
 
-**State‑less by design.**
+This experiment takes inspiration from  
+**[authetoan/gitops-secret-manager-bridge](https://github.com/authetoan/gitops-secret-manager-bridge)**
 
-Yoink deliberately avoids the ideas of “local vs remote,” “sync,” or “diff.”  
-Every command executes directly against the latest source of truth in the vault.
-
-- No working copies
-- No manual merges
-- No pull/push patterns
-- No sync drift
-
-You always interact with **the current, decryptable state**.
-
----
-
-## ⚙️ Current Limitations
-
-| Issue                                    | Description                                                      |
-| ---------------------------------------- | ---------------------------------------------------------------- |
-| ❗ **Export crash**                      | `yoink export` causes nil store reference                        |
-| 💬 **Verbose Git logs**                  | Raw `git` output still visible; will be hidden by default        |
-| 🐢 **Slow read commands**                | Reads clone full vault; will use `curl` to fetch encrypted files |
-| 🔐 **No local key sync**                 | You must manually move your Age key between devices              |
-| 🧮 **No GitHub Actions integration yet** | Workflows must be created manually                               |
-| 🪶 **CLI only (no GUI)**                 | TUI & web UIs are planned for later                              |
-| 🧩 **GitHub-only scope**                 | Other Git providers pending future support                       |
-
----
-
-## 🧩 Future & Roadmap
-
-| Priority                             | Feature                                                                   | Description |
-| ------------------------------------ | ------------------------------------------------------------------------- | ----------- |
-| 🧩 **Silent Git Mode**               | Hide all git/gh logs unless `--verbose`                                   |
-| ⚡ **Fast Reads via HTTPS (`curl`)** | Fetch encrypted file via GitHub Raw or API instead of cloning             |
-| 🧠 **`yoink status`**                | Validate setup (config presence, key decryption test, environment health) |
-| 📜 **`yoink audit`**                 | Show vault change history **and** pending Pull Requests                   |
-| 🔑 **Multi‑Device Key Sync**         | Back up your Age key in a private repo (`@user/yoink-keys`)               |
-| ⚙️ **Fix `export` Bug**              | Properly initialize and fetch from fresh vault                            |
-| 🧰 **Improved UX & Logging**         | Subtle colors, spacing, clean line output                                 |
-| ⚙️ **GitHub Actions Integration**    | Auto‑generate workflow to sync secrets to GitHub Environments             |
-| 💾 **Caching for Speed**             | Ephemeral decrypted cache for instant repeat gets                         |
-| 🖥️ **TUI Interface**                 | ncurses‑style interactive CLI dashboard                                   |
-| 🌐 **Web GUI / WebSocket API**       | Serve Yoink locally via `yoink ui` or `yoink serve`                       |
-| ☁️ **Yoink Cloud (Optional)**        | GitHub App integration for centralized secret sync                        |
-| 🔁 **Third‑Party Secret Sync**       | Sync to GitHub Envs, AWS Secrets Manager, Doppler, etc.                   |
-
----
-
-## 📜 `yoink audit`
-
-**Goal:** Transparency without exposing internal Git mechanics.
-
-The `audit` command will display both _historical updates_ and any _pending Pull Requests_ related to secrets.
-
-Example:
-
-```bash
-yoink audit
-```
-
-Output:
-
-```
-Vault: jack-kitto/test-yoink-project-vault
-
-🔐 Recent Updates:
-• 2025-11-26  update secret PROD_API_KEY by @jack
-• 2025-11-25  delete OLD_TOKEN          by @ci-bot
-• 2025-11-24  add SENDGRID_KEY          by @sarah
-
-📬 Pending Pull Requests:
-• #17  Update DB_PASSWORD  by @sarah
-• #18  Rotate REDIS_URL    by @jack
-```
-
-Optional flags:
-
-```bash
---json       # output machine-readable data
---limit 10   # show limited history
---short      # omit pull requests
-```
-
-Internally:
-
-- Uses the `gh api` or `gh pr list` commands (authenticated)
-- Pulls recent commits and messages
-- Never requires local checkout
-
----
-
-## 🧮 Stateless Command Model
-
-| Command                         | Type         | Purpose                                                     |
-| ------------------------------- | ------------ | ----------------------------------------------------------- |
-| `yoink init`                    | setup        | Initialize user config and keys                             |
-| `yoink vault-init`              | setup        | Prepare new project vault                                   |
-| `yoink set` / `yoink delete`    | write        | Add, update, or remove secrets (PR created)                 |
-| `yoink get` / `yoink list`      | read         | Fetch decrypted secrets directly from latest vault snapshot |
-| `yoink run`                     | read         | Run commands with secrets injected in env                   |
-| `yoink export`                  | read         | Export decrypted output to .env or JSON                     |
-| `yoink status`                  | diagnostic   | Check key/config validity                                   |
-| `yoink audit`                   | transparency | Display history + pending changes                           |
-| `yoink onboard` / `remove-user` | access       | Manage team membership in vault                             |
-| `yoink doctor`                  | diagnostic   | Verify dependencies (git, gh, sops, age)                    |
-
-All other Git-related behavior is completely hidden.
-
----
-
-## ⚡ Performance Roadmap
-
-| Level | Optimization              | Expected Gain                       |
-| ----- | ------------------------- | ----------------------------------- |
-| 1     | Silent Git (default)      | Clean UX                            |
-| 2     | HTTPS raw fetch           | ~100× faster read ops               |
-| 3     | Shallow clones for writes | Much faster PR generation           |
-| 4     | Ephemeral cache           | Instant repeat gets                 |
-| 5     | Background agent          | Near-zero latency across CLI/TUI/UI |
-
----
-
-## 🔑 Multi‑Device Key Sync (Planned)
-
-To securely use Yoink across multiple machines:
-
-```bash
-yoink key-sync setup  # creates @<user>/yoink-keys private repository
-yoink key-sync pull   # clones and installs Age key on new machine
-```
-
-Keys stay under your GitHub account, encrypted and privately stored.
-
----
-
-## 🧰 Developer Platform Vision
-
-| Interface                   | Purpose                                              |
-| --------------------------- | ---------------------------------------------------- |
-| **CLI**                     | Primary developer tool (current)                     |
-| **TUI (`yoink ui`)**        | Interactive console interface for browsing secrets   |
-| **Web GUI (`yoink serve`)** | Local secure web dashboard for encryption/decryption |
-| **Cloud (optional)**        | GitHub App service for team‑level vault handling     |
-| **GitHub Actions**          | Automated secret propagation for CI/CD               |
-
-Example planned integration:
-
-```bash
-yoink actions generate
-```
-
-Creates `.github/workflows/yoink-sync.yml`, which:
-
-- Installs Yoink in CI runner
-- Decrypts vault secrets securely
-- Updates GitHub environment secrets
-
----
-
-## 🧱 Development
-
-```bash
-git clone https://github.com/jack-kitto/yoink.git
-cd yoink
-make dev     # development build with race detection
-make build   # production build in ./bin/yoink
-make test
-```
-
----
-
-## 🧑💻 Contributing
-
-We welcome PRs and discussion — especially for:
-
-- Fixing `export` panic
-- Implementing `yoink audit`
-- Curl‑based read optimizations
-- TUI or Web GUI experiments
-- GitHub Actions sync prototype
-- Key sync design
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for style and contribution guide.
+That project elegantly merges GitOps discipline with AWS Secrets Manager.  
+Yoink is the local‑first, developer‑centric counterpart — exploring what happens when we rely _only_ on GitHub as the coordination layer and SOPS+Age as the encryption model.
 
 ---
 
 ## 🪶 License
 
-MIT — see [LICENSE](LICENSE)
+MIT © 2025 — built with curiosity, coffee, & good vibes.
 
 ---
 
-**Built by developers who wanted secret management to be invisible, safe, and Git‑native — without feeling like Git.**
+**Note:** This is a prototype meant for experimentation — do not use in production vaults yet.  
+Think of it as a _field test_ for next‑generation, pull‑request‑driven secrets management.
+
+---
