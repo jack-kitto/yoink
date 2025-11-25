@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 
+	"github.com/jack-kitto/yoink/internal/store"
+	"github.com/jack-kitto/yoink/internal/vault"
 	"github.com/spf13/cobra"
 )
 
@@ -20,7 +23,24 @@ func exportCmd() *cobra.Command {
 				return err
 			}
 
-			all, err := secretStore.All()
+			// Initialize vault manager and sync (like other commands)
+			vman, err := vault.New(projectCfg.VaultRepo)
+			if err != nil {
+				return err
+			}
+
+			defer vman.Cleanup()
+
+			if err := vman.Sync(); err != nil {
+				return err
+			}
+
+			// Create store instance
+			encPath := filepath.Join(vman.WorkDir, "repo", "secrets.enc.yaml")
+			s := store.New(encPath)
+
+			// Get all secrets
+			all, err := s.All()
 			if err != nil {
 				return err
 			}
@@ -41,11 +61,11 @@ func exportCmd() *cobra.Command {
 					return nil
 				}
 
-				return os.WriteFile(envFile, data, 0600)
+				return os.WriteFile(envFile, data, 0o600)
 			}
 
 			// Export as .env format
-			envOutput, err := secretStore.ExportEnv()
+			envOutput, err := s.ExportEnv()
 			if err != nil {
 				return err
 			}
@@ -60,7 +80,7 @@ func exportCmd() *cobra.Command {
 				return nil
 			}
 
-			if err := os.WriteFile(envFile, []byte(envOutput), 0600); err != nil {
+			if err := os.WriteFile(envFile, []byte(envOutput), 0o600); err != nil {
 				return err
 			}
 
