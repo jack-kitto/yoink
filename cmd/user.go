@@ -6,10 +6,10 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/spf13/cobra"
 	"github.com/jack-kitto/yoink/internal/config"
 	"github.com/jack-kitto/yoink/internal/git"
 	"github.com/jack-kitto/yoink/internal/project"
+	"github.com/spf13/cobra"
 )
 
 func onboardCmd() *cobra.Command {

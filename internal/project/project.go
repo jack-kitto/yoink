@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gopkg.in/yaml.v3"
 	"github.com/jack-kitto/yoink/internal/util"
+	"gopkg.in/yaml.v3"
 )
 
 type ProjectConfig struct {
