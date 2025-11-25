@@ -7,11 +7,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/spf13/cobra"
 	"github.com/jack-kitto/yoink/internal/config"
 	"github.com/jack-kitto/yoink/internal/project"
 	"github.com/jack-kitto/yoink/internal/store"
 	"github.com/jack-kitto/yoink/internal/util"
+	"github.com/jack-kitto/yoink/internal/vault"
+	"github.com/spf13/cobra"
 )
 
 func vaultInitCmd() *cobra.Command {
@@ -55,12 +56,68 @@ func vaultInitCmd() *cobra.Command {
 				return fmt.Errorf("failed to initialize SOPS: %w", err)
 			}
 
+			// Push SOPS configuration to vault repository
+			if err := pushSOPSToVault(); err != nil {
+				return fmt.Errorf("failed to push SOPS config to vault: %w", err)
+			}
+
 			fmt.Println("✅ Project vault initialization complete")
 			fmt.Println("💡 You can now run 'yoink set KEY value' to add secrets")
 
 			return nil
 		},
 	}
+}
+
+// Add this new function to push SOPS config to vault
+func pushSOPSToVault() error {
+	// Load project config to get vault repo
+	projectCfg, err := project.LoadProject()
+	if err != nil {
+		return err
+	}
+
+	// Create vault manager and sync
+	vman, err := vault.New(projectCfg.VaultRepo)
+	if err != nil {
+		return err
+	}
+
+	defer vman.Cleanup()
+
+	if err := vman.Sync(); err != nil {
+		return err
+	}
+
+	// Copy .sops.yaml to vault repo
+	repoDir := filepath.Join(vman.WorkDir, "repo")
+	srcSOPS := ".sops.yaml"
+	destSOPS := filepath.Join(repoDir, ".sops.yaml")
+
+	if util.FileExists(srcSOPS) {
+		data, err := os.ReadFile(srcSOPS)
+		if err != nil {
+			return err
+		}
+
+		if err := os.WriteFile(destSOPS, data, 0o644); err != nil {
+			return err
+		}
+
+		// Initialize git if needed for empty repo
+		exec.Command("git", "-C", repoDir, "init").Run()
+		exec.Command("git", "-C", repoDir, "config", "user.email", "yoink@example.com").Run()
+		exec.Command("git", "-C", repoDir, "config", "user.name", "Yoink").Run()
+
+		// Commit and push SOPS config (no PR for initial setup)
+		fmt.Println("🔐 Pushing SOPS configuration to vault...")
+		if err := vman.CommitAndPush(".sops.yaml", "chore: add SOPS configuration", false); err != nil {
+			// Don't fail if this doesn't work, just warn
+			fmt.Printf("⚠️  Warning: Could not push SOPS config to vault: %v\n", err)
+		}
+	}
+
+	return nil
 }
 
 func ensureGlobalConfig() error {
@@ -118,7 +175,7 @@ func ensureAgeKey() error {
 	for _, line := range lines {
 		if strings.HasPrefix(line, "# public key: ") {
 			pubKey := strings.TrimPrefix(line, "# public key: ")
-			if err := os.WriteFile(pubPath, []byte(pubKey), 0644); err != nil {
+			if err := os.WriteFile(pubPath, []byte(pubKey), 0o644); err != nil {
 				return err
 			}
 			break

@@ -6,10 +6,31 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/jack-kitto/yoink/internal/config"
 )
+
+// setAgeKeyEnv sets the SOPS_AGE_KEY_FILE environment variable to point to yoink's age key
+func setAgeKeyEnv() error {
+	keyPath, err := config.GetAgeKeyPath()
+	if err != nil {
+		return fmt.Errorf("failed to get age key path: %w", err)
+	}
+
+	if _, err := os.Stat(keyPath); err != nil {
+		return fmt.Errorf("age key not found at %s (run 'yoink init' to generate it): %w", keyPath, err)
+	}
+
+	os.Setenv("SOPS_AGE_KEY_FILE", keyPath)
+	return nil
+}
 
 // EncryptWithSOPS uses the sops CLI to encrypt a YAML or JSON file
 func EncryptWithSOPS(input, output string) error {
+	if err := setAgeKeyEnv(); err != nil {
+		return err
+	}
+
 	cmd := exec.Command("sops", "-e", input)
 	data, err := cmd.Output()
 	if err != nil {
@@ -19,11 +40,15 @@ func EncryptWithSOPS(input, output string) error {
 		}
 		return fmt.Errorf("sops encryption failed: %w", err)
 	}
-	return os.WriteFile(output, data, 0600)
+	return os.WriteFile(output, data, 0o600)
 }
 
 // DecryptWithSOPS uses the sops CLI to decrypt a YAML or JSON file
 func DecryptWithSOPS(input, output string) error {
+	if err := setAgeKeyEnv(); err != nil {
+		return err
+	}
+
 	cmd := exec.Command("sops", "-d", input)
 	data, err := cmd.Output()
 	if err != nil {
@@ -33,11 +58,15 @@ func DecryptWithSOPS(input, output string) error {
 		}
 		return fmt.Errorf("sops decryption failed: %w", err)
 	}
-	return os.WriteFile(output, data, 0600)
+	return os.WriteFile(output, data, 0o600)
 }
 
 // DecryptToString decrypts a SOPS file and returns the content as string
 func DecryptToString(input string) (string, error) {
+	if err := setAgeKeyEnv(); err != nil {
+		return "", err
+	}
+
 	cmd := exec.Command("sops", "-d", input)
 	data, err := cmd.Output()
 	if err != nil {
@@ -51,6 +80,10 @@ func DecryptToString(input string) (string, error) {
 
 // EncryptString encrypts a string using SOPS and writes to output file
 func EncryptString(content string, output string) error {
+	if err := setAgeKeyEnv(); err != nil {
+		return err
+	}
+
 	// Create temporary file with content
 	tmpFile, err := os.CreateTemp("", "yoink-*.yaml")
 	if err != nil {
@@ -100,7 +133,7 @@ func InitSOPSForVault(vaultPath string, ageKeys []string) error {
 `, strings.Join(ageKeys, ","))
 
 	sopsPath := filepath.Join(vaultPath, ".sops.yaml")
-	return os.WriteFile(sopsPath, []byte(sopsConfig), 0644)
+	return os.WriteFile(sopsPath, []byte(sopsConfig), 0o644)
 }
 
 // InitSOPSForProject initializes SOPS configuration for a project (in project root)
@@ -111,5 +144,5 @@ func InitSOPSForProject(projectPath string, ageKeys []string) error {
 `, strings.Join(ageKeys, ","))
 
 	sopsPath := filepath.Join(projectPath, ".sops.yaml")
-	return os.WriteFile(sopsPath, []byte(sopsConfig), 0644)
+	return os.WriteFile(sopsPath, []byte(sopsConfig), 0o644)
 }

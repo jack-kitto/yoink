@@ -6,14 +6,14 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gopkg.in/yaml.v3"
 	"github.com/jack-kitto/yoink/internal/util"
+	"gopkg.in/yaml.v3"
 )
 
 type Store struct {
-	Path     string
-	data     map[string]string
-	dryRun   bool
+	Path   string
+	data   map[string]string
+	dryRun bool
 }
 
 func New(path string) *Store {
@@ -61,11 +61,15 @@ func (s *Store) load() error {
 	defer os.Remove(tmpFile.Name())
 	defer tmpFile.Close()
 
-	// Decrypt the file
+	// Decrypt the file - don't silently ignore errors
 	if err := DecryptWithSOPS(s.Path, tmpFile.Name()); err != nil {
-		// If decryption fails, it might be an empty/new file
-		s.data = make(map[string]string)
-		return nil
+		// Check if the file is actually empty/corrupted
+		if fileInfo, statErr := os.Stat(s.Path); statErr == nil && fileInfo.Size() == 0 {
+			fmt.Printf("⚠️  Warning: secrets file is empty\n")
+			s.data = make(map[string]string)
+			return nil
+		}
+		return fmt.Errorf("failed to decrypt secrets file %s: %w", s.Path, err)
 	}
 
 	// Read decrypted content
@@ -74,10 +78,16 @@ func (s *Store) load() error {
 		return err
 	}
 
+	// Handle empty decrypted content
+	if len(data) == 0 {
+		s.data = make(map[string]string)
+		return nil
+	}
+
 	// Parse YAML
 	var yamlData map[string]interface{}
 	if err := yaml.Unmarshal(data, &yamlData); err != nil {
-		return err
+		return fmt.Errorf("failed to parse decrypted YAML: %w", err)
 	}
 
 	// Convert to string map

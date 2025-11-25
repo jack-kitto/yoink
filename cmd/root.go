@@ -3,14 +3,16 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/jack-kitto/yoink/internal/config"
-	"github.com/jack-kitto/yoink/internal/git"
 	"github.com/jack-kitto/yoink/internal/project"
 	"github.com/jack-kitto/yoink/internal/store"
 	"github.com/jack-kitto/yoink/internal/util"
+	"github.com/jack-kitto/yoink/internal/vault"
 )
 
 var (
@@ -21,6 +23,7 @@ var (
 	projectMode  bool
 	dryRun       bool
 	version      string
+	autoPR       bool
 )
 
 func Execute(v string) {
@@ -35,248 +38,85 @@ func Execute(v string) {
 func buildRoot() *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use:   "yoink",
-		Short: "Yoink — a Git-native secret manager",
-		Long:  "Yoink manages encrypted secrets using SOPS and GitHub without any backend service.",
-		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			// Skip dependency check for version, help, and reset commands
-			if cmd.Name() == "version" || cmd.Name() == "help" || cmd.Name() == "reset" || cmd.Name() == "vault-reset" {
-				return nil
-			}
-
-			// Check dependencies for all other commands except init
-			if cmd.Name() != "init" {
-				if err := util.CheckDependencies(); err != nil {
-					return err
-				}
-			}
-			return nil
-		},
+		Short: "Yoink — a Git-native secret manager with invisible vaults",
+		Long:  "Yoink manages encrypted secrets securely with SOPS and uses GitHub as a backend vault, fully automated and invisible to developers.",
 	}
 
 	rootCmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "Show what would be done without making changes")
 
 	rootCmd.AddCommand(
 		initCmd(),
-		setCmd(),
-		getCmd(),
-		deleteCmd(),
-		listCmd(),
-		runCmd(),
-		exportCmd(),
 		vaultInitCmd(),
-		onboardCmd(),
-		removeUserCmd(),
 		resetCmd(),
 		vaultResetCmd(),
+		setCmd(),
+		getCmd(),
+		debugCmd(),
+		deleteCmd(),
+		listCmd(),
+		exportCmd(),
+		runCmd(),
+		onboardCmd(),
+		removeUserCmd(),
 		versionCmd(),
 	)
 
 	return rootCmd
 }
 
-func versionCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "version",
-		Short: "Show version information",
-		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("yoink version %s\n", version)
-		},
-	}
-}
-
-func resetCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "reset",
-		Short: "Reset global yoink configuration",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if dryRun {
-				fmt.Println("🔍 [DRY RUN] Would reset global configuration")
-				return nil
-			}
-
-			cfgPath, err := config.GetConfigPath()
-			if err != nil {
-				return err
-			}
-
-			keyPath, err := config.GetAgeKeyPath()
-			if err != nil {
-				return err
-			}
-
-			pubPath, err := config.GetAgePublicKeyPath()
-			if err != nil {
-				return err
-			}
-
-			// Remove config file
-			if util.FileExists(cfgPath) {
-				os.Remove(cfgPath)
-				fmt.Printf("🗑️  Removed config: %s\n", cfgPath)
-			}
-
-			// Remove age keys
-			if util.FileExists(keyPath) {
-				os.Remove(keyPath)
-				fmt.Printf("🗑️  Removed age key: %s\n", keyPath)
-			}
-
-			if util.FileExists(pubPath) {
-				os.Remove(pubPath)
-				fmt.Printf("🗑️  Removed public key: %s\n", pubPath)
-			}
-
-			fmt.Println("✅ Global configuration reset complete")
-			fmt.Println("💡 Run 'yoink init' to set up again")
-			return nil
-		},
-	}
-}
-
-func vaultResetCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "vault-reset",
-		Short: "Reset project vault configuration",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if dryRun {
-				fmt.Println("🔍 [DRY RUN] Would reset project vault configuration")
-				return nil
-			}
-
-			// Remove .yoink.yaml
-			if util.FileExists(".yoink.yaml") {
-				os.Remove(".yoink.yaml")
-				fmt.Println("🗑️  Removed .yoink.yaml")
-			}
-
-			// Remove .yoink directory
-			if util.FileExists(".yoink") {
-				os.RemoveAll(".yoink")
-				fmt.Println("🗑️  Removed .yoink directory")
-			}
-
-			// Remove .sops.yaml if it exists
-			if util.FileExists(".sops.yaml") {
-				os.Remove(".sops.yaml")
-				fmt.Println("🗑️  Removed .sops.yaml")
-			}
-
-			fmt.Println("✅ Project vault configuration reset complete")
-			fmt.Println("💡 Run 'yoink vault-init' to set up vault again")
-			return nil
-		},
-	}
-}
-
-// ----------------------------------------------------------------------
-
-func initCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "init",
-		Short: "Initialize global yoink configuration",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if dryRun {
-				fmt.Println("🔍 [DRY RUN] Would initialize global configuration")
-				return nil
-			}
-
-			if err := config.InitConfig(); err != nil {
-				// If config already exists, just inform the user
-				if os.IsExist(err) {
-					fmt.Println("ℹ️  Global configuration already exists")
-					return nil
-				}
-				return err
-			}
-
-			fmt.Println("✅ Global configuration initialized successfully.")
-			fmt.Println("💡 Run 'yoink vault-init' in your project to set up a vault.")
-			return nil
-		},
-	}
-}
-
-// ensureConfigLoaded loads global or project config
+// ensureConfigLoaded loads and prepares vault if possible.
 func ensureConfigLoaded() error {
 	if configLoaded {
 		return nil
 	}
 
-	// Try to load project config first
-	if projCfg, err := project.LoadProject(); err == nil {
-		projectCfg = projCfg
-		secretStore = store.NewWithDryRun(projectCfg.SecretsPath, dryRun)
-		projectMode = true
-		configLoaded = true
-		return nil
-	}
-
-	// Fallback to global config
-	conf, err := config.LoadConfig()
+	projCfg, err := project.LoadProject()
 	if err != nil {
-		return fmt.Errorf("no configuration found. Run 'yoink init' for global config or 'yoink vault-init' for project config")
+		return fmt.Errorf("run 'yoink vault-init' first in your project: %w", err)
 	}
-
-	cfg = conf
-	secretStore = store.NewWithDryRun(cfg.SecretsFile, dryRun)
-	projectMode = false
+	projectCfg = projCfg
 	configLoaded = true
+	projectMode = true
 	return nil
 }
-
-// ----------------------------------------------------------------------
 
 func setCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "set <key> <value>",
-		Short: "Store or update a secret",
+		Short: "Store or update a secret (creates a PR to vault automatically)",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := ensureConfigLoaded(); err != nil {
 				return err
 			}
-
-			key := args[0]
-			value := args[1]
-
-			if err := secretStore.Set(key, value); err != nil {
-				return err
-			}
-
-			if !dryRun {
-				// Auto-commit and push if in project mode
-				if projectMode {
-					commitMsg := fmt.Sprintf("update secret %s", key)
-					if err := git.CommitAndPush(secretStore.Path, commitMsg); err != nil {
-						fmt.Printf("⚠️  Git commit failed: %v\n", err)
-					} else {
-						fmt.Printf("📤 Changes committed and pushed\n")
-					}
-				}
-
-				fmt.Printf("✅ Secret '%s' saved\n", key)
-			}
-			return nil
-		},
-	}
-}
-
-func getCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "get <key>",
-		Short: "Retrieve a secret value",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := ensureConfigLoaded(); err != nil {
-				return err
-			}
-
-			value, err := secretStore.Get(args[0])
+			key, val := args[0], args[1]
+			vman, err := vault.New(projectCfg.VaultRepo)
 			if err != nil {
 				return err
 			}
 
-			fmt.Printf("%s=%s\n", args[0], value)
+			defer func() {
+				// Only cleanup on success
+				if err == nil {
+					vman.Cleanup()
+				}
+			}()
+
+			if err := vman.Sync(); err != nil {
+				return err
+			}
+
+			encPath := filepath.Join(vman.WorkDir, "repo", "secrets.enc.yaml")
+			s := store.New(encPath)
+			if err := s.Set(key, val); err != nil {
+				return err
+			}
+
+			if err := vman.CommitAndPush("secrets.enc.yaml", fmt.Sprintf("update secret %s", key), true); err != nil {
+				return fmt.Errorf("failed to commit and create PR: %w", err)
+			}
+
+			fmt.Printf("✅ Secret '%s' updated in vault (PR created)\n", key)
 			return nil
 		},
 	}
@@ -285,31 +125,146 @@ func getCmd() *cobra.Command {
 func deleteCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "delete <key>",
-		Short: "Delete a secret",
+		Short: "Delete a secret entry (creates a PR to remove it)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := ensureConfigLoaded(); err != nil {
 				return err
 			}
-
 			key := args[0]
-			if err := secretStore.Delete(key); err != nil {
+			vman, _ := vault.New(projectCfg.VaultRepo)
+			_ = vman.Sync()
+			s := store.New(filepath.Join(vman.WorkDir, "repo", "secrets.enc.yaml"))
+			if err := s.Delete(key); err != nil {
+				return err
+			}
+			if err := vman.CommitAndPush("secrets.enc.yaml", fmt.Sprintf("delete secret %s", key), true); err != nil {
+				return err
+			}
+			vman.Cleanup()
+			fmt.Printf("✅ Secret '%s' deleted (PR created)\n", key)
+			return nil
+		},
+	}
+}
+
+func initCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "init",
+		Short: "Initialize global Yoink configuration (~/.config/yoink)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if dryRun {
+				fmt.Println("🔍 [DRY RUN] Would initialize global configuration")
+				return nil
+			}
+			err := ensureGlobalConfig()
+			if err != nil {
+				return fmt.Errorf("failed to initialize global config: %w", err)
+			}
+			fmt.Println("✅ Global Yoink configuration initialized")
+			return nil
+		},
+	}
+}
+
+func resetCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "reset",
+		Short: "Reset local secrets (delete .yoink/secrets and configuration)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if dryRun {
+				fmt.Println("🔍 [DRY RUN] Would reset local secrets")
+
+				return nil
+			}
+			fmt.Println("🧹 Resetting local secrets...")
+			if err := os.RemoveAll(".yoink"); err != nil {
+				return err
+			}
+			fmt.Println("✅ Local secrets reset")
+			return nil
+		},
+	}
+}
+
+func vaultResetCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "vault-reset",
+		Short: "Force reset and re-clone the remote vault repository",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := ensureConfigLoaded(); err != nil {
 				return err
 			}
 
-			if !dryRun {
-				// Auto-commit and push if in project mode
-				if projectMode {
-					commitMsg := fmt.Sprintf("delete secret %s", key)
-					if err := git.CommitAndPush(secretStore.Path, commitMsg); err != nil {
-						fmt.Printf("⚠️  Git commit failed: %v\n", err)
-					} else {
-						fmt.Printf("📤 Changes committed and pushed\n")
-					}
-				}
-
-				fmt.Printf("✅ Secret '%s' deleted\n", key)
+			vman, err := vault.New(projectCfg.VaultRepo)
+			if err != nil {
+				return err
 			}
+
+			if dryRun {
+				fmt.Println("🔍 [DRY RUN] Would reset and re-clone vault repository.")
+				return nil
+			}
+
+			fmt.Println("🌀 Re-cloning vault repository...")
+
+			// Clean up old repo directory ONLY, not the entire workdir parent
+			repoDir := filepath.Join(vman.WorkDir, "repo")
+			os.RemoveAll(repoDir)
+
+			if err := vman.Sync(); err != nil {
+				return fmt.Errorf("failed to clone vault: %w", err)
+			}
+
+			fmt.Println("✅ Vault reset complete")
+			return nil
+		},
+	}
+}
+
+func versionCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "Show the current version of Yoink",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Printf("Yoink version: %s\n", version)
+		},
+	}
+}
+
+func getCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "get <key>",
+		Short: "Retrieve a secret's decrypted value (secure temporary operation)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := ensureConfigLoaded(); err != nil {
+				return err
+			}
+			vman, err := vault.New(projectCfg.VaultRepo)
+			if err != nil {
+				return err
+			}
+			if err := vman.Sync(); err != nil {
+				return err
+			}
+
+			encPath := filepath.Join(vman.WorkDir, "repo", "secrets.enc.yaml")
+			fmt.Printf("🔍 Looking for secrets at: %s\n", encPath)
+
+			// Check if file exists
+			if !util.FileExists(encPath) {
+				vman.Cleanup()
+				return fmt.Errorf("secrets file not found at %s", encPath)
+			}
+
+			s := store.New(encPath)
+			val, err := s.Get(args[0])
+			vman.Cleanup()
+			if err != nil {
+				return err
+			}
+			fmt.Printf("%s=%s\n", args[0], val)
 			return nil
 		},
 	}
@@ -318,25 +273,101 @@ func deleteCmd() *cobra.Command {
 func listCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
-		Short: "List available secret keys",
+		Short: "List all secret keys from the remote vault (decrypted temporarily)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := ensureConfigLoaded(); err != nil {
+				return err
+			}
+			vman, _ := vault.New(projectCfg.VaultRepo)
+			_ = vman.Sync()
+
+			encPath := filepath.Join(vman.WorkDir, "repo", "secrets.enc.yaml")
+			fmt.Printf("🔍 Looking for secrets at: %s\n", encPath)
+
+			// Check if file exists
+			if !util.FileExists(encPath) {
+				vman.Cleanup()
+				fmt.Println("(no secrets file found in vault)")
+				return nil
+			}
+
+			s := store.New(encPath)
+			keys, err := s.Keys()
+			vman.Cleanup()
+			if err != nil {
+				return err
+			}
+			if len(keys) == 0 {
+				fmt.Println("(no secrets in vault)")
+				return nil
+			}
+			for _, k := range keys {
+				fmt.Println(k)
+			}
+			return nil
+		},
+	}
+}
+
+func debugCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "debug",
+		Short: "Debug vault and secrets information",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := ensureConfigLoaded(); err != nil {
 				return err
 			}
 
-			keys, err := secretStore.Keys()
+			fmt.Printf("Project config: %+v\n", projectCfg)
+
+			vman, err := vault.New(projectCfg.VaultRepo)
 			if err != nil {
 				return err
 			}
 
-			if len(keys) == 0 {
-				fmt.Println("(no secrets stored yet)")
-				return nil
+			if err := vman.Sync(); err != nil {
+				return err
 			}
 
-			for _, k := range keys {
-				fmt.Println(k)
+			repoDir := filepath.Join(vman.WorkDir, "repo")
+			fmt.Printf("Vault repo cloned to: %s\n", repoDir)
+
+			// List files in repo
+			fmt.Println("Files in vault repo:")
+			filepath.Walk(repoDir, func(path string, info os.FileInfo, err error) error {
+				if err != nil {
+					return err
+				}
+				relPath, _ := filepath.Rel(repoDir, path)
+				fmt.Printf("  %s\n", relPath)
+				return nil
+			})
+
+			encPath := filepath.Join(repoDir, "secrets.enc.yaml")
+			if util.FileExists(encPath) {
+				fmt.Printf("Secrets file exists: %s\n", encPath)
+
+				// Try to get file info
+				if info, err := os.Stat(encPath); err == nil {
+					fmt.Printf("File size: %d bytes\n", info.Size())
+				}
+
+				// Try to read raw content (first few lines)
+				if data, err := os.ReadFile(encPath); err == nil {
+					lines := strings.Split(string(data), "\n")
+					fmt.Printf("First few lines of encrypted file:\n")
+					for i, line := range lines {
+						if i >= 3 {
+							break
+						}
+						fmt.Printf("  %s\n", line)
+					}
+				}
+			} else {
+				fmt.Printf("Secrets file does NOT exist at: %s\n", encPath)
 			}
+
+			vman.Cleanup()
 			return nil
 		},
 	}
