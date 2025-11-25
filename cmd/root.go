@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -22,6 +23,7 @@ var (
 	configLoaded bool
 	projectMode  bool
 	dryRun       bool
+	verbose      bool
 	version      string
 	autoPR       bool
 )
@@ -35,6 +37,7 @@ func Execute(v string) {
 	}
 }
 
+// cmd/root.go (updated sections)
 func buildRoot() *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use:   "yoink",
@@ -43,6 +46,7 @@ func buildRoot() *cobra.Command {
 	}
 
 	rootCmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "Show what would be done without making changes")
+	rootCmd.PersistentFlags().BoolVar(&verbose, "verbose", false, "Show detailed output including git operations")
 
 	rootCmd.AddCommand(
 		initCmd(),
@@ -59,9 +63,59 @@ func buildRoot() *cobra.Command {
 		onboardCmd(),
 		removeUserCmd(),
 		versionCmd(),
+		statusCmd(), // New command
+		auditCmd(),  // New command
 	)
 
 	return rootCmd
+}
+
+// Update commands to use fast store for read operations
+func getCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "get <key>",
+		Short: "Retrieve a secret's decrypted value (secure temporary operation)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := ensureConfigLoaded(); err != nil {
+				return err
+			}
+
+			// Try fast fetch first
+			fs := store.NewFast(projectCfg.VaultRepo)
+			val, err := fs.Get(args[0])
+			if err == nil {
+				fmt.Printf("%s=%s\n", args[0], val)
+				return nil
+			}
+
+			if verbose {
+				fmt.Printf("⚠️  Fast fetch failed (%v), falling back to git clone...\n", err)
+			}
+
+			// Fallback to traditional method
+			vman, err := vault.New(projectCfg.VaultRepo)
+			if err != nil {
+				return err
+			}
+			vman.Verbose = verbose
+
+			defer vman.Cleanup()
+
+			if err := vman.Sync(); err != nil {
+				return err
+			}
+
+			encPath := filepath.Join(vman.WorkDir, "repo", "secrets.enc.yaml")
+			s := store.New(encPath)
+			val, err = s.Get(args[0])
+			if err != nil {
+				return err
+			}
+			fmt.Printf("%s=%s\n", args[0], val)
+			return nil
+		},
+	}
 }
 
 // ensureConfigLoaded loads and prepares vault if possible.
@@ -94,6 +148,8 @@ func setCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+
+			vman.Verbose = verbose
 
 			defer func() {
 				// Only cleanup on success
@@ -232,68 +288,49 @@ func versionCmd() *cobra.Command {
 	}
 }
 
-func getCmd() *cobra.Command {
+func listCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "get <key>",
-		Short: "Retrieve a secret's decrypted value (secure temporary operation)",
-		Args:  cobra.ExactArgs(1),
+		Use:   "list",
+		Short: "List all secret keys from the remote vault",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := ensureConfigLoaded(); err != nil {
 				return err
 			}
+
+			// Try fast fetch first
+			fs := store.NewFast(projectCfg.VaultRepo)
+			keys, err := fs.Keys()
+			if err == nil {
+				if len(keys) == 0 {
+					fmt.Println("(no secrets in vault)")
+					return nil
+				}
+				for _, k := range keys {
+					fmt.Println(k)
+				}
+				return nil
+			}
+
+			if verbose {
+				fmt.Printf("⚠️  Fast fetch failed (%v), falling back to git clone...\n", err)
+			}
+
+			// Fallback to traditional method
 			vman, err := vault.New(projectCfg.VaultRepo)
 			if err != nil {
 				return err
 			}
+			vman.Verbose = verbose
+
+			defer vman.Cleanup()
+
 			if err := vman.Sync(); err != nil {
 				return err
 			}
 
 			encPath := filepath.Join(vman.WorkDir, "repo", "secrets.enc.yaml")
-			fmt.Printf("🔍 Looking for secrets at: %s\n", encPath)
-
-			// Check if file exists
-			if !util.FileExists(encPath) {
-				vman.Cleanup()
-				return fmt.Errorf("secrets file not found at %s", encPath)
-			}
-
 			s := store.New(encPath)
-			val, err := s.Get(args[0])
-			vman.Cleanup()
-			if err != nil {
-				return err
-			}
-			fmt.Printf("%s=%s\n", args[0], val)
-			return nil
-		},
-	}
-}
-
-func listCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "list",
-		Short: "List all secret keys from the remote vault (decrypted temporarily)",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := ensureConfigLoaded(); err != nil {
-				return err
-			}
-			vman, _ := vault.New(projectCfg.VaultRepo)
-			_ = vman.Sync()
-
-			encPath := filepath.Join(vman.WorkDir, "repo", "secrets.enc.yaml")
-			fmt.Printf("🔍 Looking for secrets at: %s\n", encPath)
-
-			// Check if file exists
-			if !util.FileExists(encPath) {
-				vman.Cleanup()
-				fmt.Println("(no secrets file found in vault)")
-				return nil
-			}
-
-			s := store.New(encPath)
-			keys, err := s.Keys()
-			vman.Cleanup()
+			keys, err = s.Keys()
 			if err != nil {
 				return err
 			}
@@ -307,6 +344,82 @@ func listCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func runCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "run -- <command>",
+		Short: "Run a command with secrets injected as environment variables",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := ensureConfigLoaded(); err != nil {
+				return err
+			}
+
+			// Try fast fetch first
+			fs := store.NewFast(projectCfg.VaultRepo)
+			envMap, err := fs.All()
+			if err != nil && verbose {
+				fmt.Printf("⚠️  Fast fetch failed (%v), falling back to git clone...\n", err)
+			}
+
+			// Fallback to traditional method if fast fetch fails
+			if err != nil {
+				vman, err := vault.New(projectCfg.VaultRepo)
+				if err != nil {
+					return fmt.Errorf("failed to initialize vault: %w", err)
+				}
+				vman.Verbose = verbose
+
+				defer vman.Cleanup()
+
+				if err := vman.Sync(); err != nil {
+					return fmt.Errorf("failed to sync vault: %w", err)
+				}
+
+				encPath := filepath.Join(vman.WorkDir, "repo", "secrets.enc.yaml")
+				s := store.New(encPath)
+				envMap, err = s.All()
+				if err != nil {
+					return fmt.Errorf("failed to load secrets: %w", err)
+				}
+			}
+
+			if dryRun {
+				fmt.Println("🔍 [DRY RUN] Would run command with injected secrets:")
+				for k := range envMap {
+					fmt.Printf("  %s=***\n", k)
+				}
+				fmt.Printf("Command: %v\n", args)
+				return nil
+			}
+
+			// Start with current environment
+			env := os.Environ()
+
+			// Add secrets as environment variables
+			for k, v := range envMap {
+				env = append(env, fmt.Sprintf("%s=%s", k, v))
+			}
+
+			// Execute the command with inherited streams
+			c := exec.Command(args[0], args[1:]...)
+			c.Env = env
+			c.Stdout = os.Stdout
+			c.Stderr = os.Stderr
+			c.Stdin = os.Stdin
+
+			if !verbose {
+				fmt.Printf("🚀 Running command with %d secrets...\n", len(envMap))
+			} else {
+				fmt.Printf("🚀 Running command with %d injected secrets: %v\n", len(envMap), args)
+			}
+
+			return c.Run()
+		},
+	}
+
+	return cmd
 }
 
 func debugCmd() *cobra.Command {
