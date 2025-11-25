@@ -63,8 +63,9 @@ func buildRoot() *cobra.Command {
 		onboardCmd(),
 		removeUserCmd(),
 		versionCmd(),
-		statusCmd(), // New command
-		auditCmd(),  // New command
+		statusCmd(),
+		auditCmd(),
+		keySyncCmd(),
 	)
 
 	return rootCmd
