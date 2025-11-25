@@ -69,8 +69,12 @@ func EncryptString(content string, output string) error {
 
 // CheckSOPSConfig verifies that SOPS configuration is available
 func CheckSOPSConfig(dir string) error {
-	// Check for .sops.yaml in the directory or parent directories
-	currentDir := dir
+	// Check for .sops.yaml starting from the given directory and walking up
+	currentDir, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+
 	for {
 		sopsPath := filepath.Join(currentDir, ".sops.yaml")
 		if _, err := os.Stat(sopsPath); err == nil {
@@ -96,5 +100,16 @@ func InitSOPSForVault(vaultPath string, ageKeys []string) error {
 `, strings.Join(ageKeys, ","))
 
 	sopsPath := filepath.Join(vaultPath, ".sops.yaml")
+	return os.WriteFile(sopsPath, []byte(sopsConfig), 0644)
+}
+
+// InitSOPSForProject initializes SOPS configuration for a project (in project root)
+func InitSOPSForProject(projectPath string, ageKeys []string) error {
+	sopsConfig := fmt.Sprintf(`creation_rules:
+  - path_regex: .*\.(yaml|yml|json)$
+    age: %s
+`, strings.Join(ageKeys, ","))
+
+	sopsPath := filepath.Join(projectPath, ".sops.yaml")
 	return os.WriteFile(sopsPath, []byte(sopsConfig), 0644)
 }

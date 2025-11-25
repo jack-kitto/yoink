@@ -29,9 +29,15 @@ func vaultInitCmd() *cobra.Command {
 				return fmt.Errorf("not in a git repository - run 'git init' first")
 			}
 
-			// Check if already initialized
-			if util.FileExists(".yoink.yaml") {
-				return fmt.Errorf("vault already initialized (.yoink.yaml exists)")
+			// Check if already initialized and properly set up
+			if util.FileExists(".yoink.yaml") && util.FileExists(".sops.yaml") {
+				fmt.Println("ℹ️  Project vault already initialized")
+				return nil
+			}
+
+			// Ensure global config exists
+			if err := ensureGlobalConfig(); err != nil {
+				return err
 			}
 
 			// Generate age key if it doesn't exist
@@ -39,19 +45,34 @@ func vaultInitCmd() *cobra.Command {
 				return fmt.Errorf("failed to set up age key: %w", err)
 			}
 
-			// Initialize the project
+			// Initialize the project (this may recreate .yoink.yaml if missing)
 			if err := project.InitProject(); err != nil {
 				return err
 			}
 
-			// Initialize SOPS configuration
+			// Initialize SOPS configuration in project root
 			if err := initSOPSForProject(); err != nil {
 				return fmt.Errorf("failed to initialize SOPS: %w", err)
 			}
 
+			fmt.Println("✅ Project vault initialization complete")
+			fmt.Println("💡 You can now run 'yoink set KEY value' to add secrets")
+
 			return nil
 		},
 	}
+}
+
+func ensureGlobalConfig() error {
+	// Check if global config exists, if not create it
+	_, err := config.LoadConfig()
+	if err != nil {
+		fmt.Println("🔧 Global config not found, creating...")
+		if err := config.InitConfig(); err != nil {
+			return fmt.Errorf("failed to create global config: %w", err)
+		}
+	}
+	return nil
 }
 
 func ensureAgeKey() error {
@@ -109,6 +130,12 @@ func ensureAgeKey() error {
 }
 
 func initSOPSForProject() error {
+	// Check if .sops.yaml already exists
+	if util.FileExists(".sops.yaml") {
+		fmt.Println("🔐 Using existing SOPS configuration")
+		return nil
+	}
+
 	// Read the public key
 	pubPath, err := config.GetAgePublicKeyPath()
 	if err != nil {
@@ -122,15 +149,7 @@ func initSOPSForProject() error {
 
 	publicKey := strings.TrimSpace(string(pubKeyData))
 
-	// Create .sops.yaml in the vault directory
-	vaultDir, err := project.GetVaultDir()
-	if err != nil {
-		return err
-	}
-
-	if err := util.EnsureDir(vaultDir); err != nil {
-		return err
-	}
-
-	return store.InitSOPSForVault(vaultDir, []string{publicKey})
+	// Create .sops.yaml in the project root (not in .yoink directory)
+	fmt.Println("🔐 Creating SOPS configuration...")
+	return store.InitSOPSForProject(".", []string{publicKey})
 }

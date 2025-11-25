@@ -32,10 +32,26 @@ func InitProject() error {
 		return fmt.Errorf("not in a git repository: %w", err)
 	}
 
-	// Create .yoink.yaml
+	// Get the GitHub username
+	username, err := getCurrentGitHubUser()
+	if err != nil {
+		return fmt.Errorf("failed to get GitHub username: %w", err)
+	}
+
+	// Create .yoink.yaml with proper vault URL including username
 	cfg := ProjectConfig{
-		VaultRepo:   fmt.Sprintf("git@github.com:%s-vault.git", repoName),
+		VaultRepo:   fmt.Sprintf("git@github.com:%s/%s-vault.git", username, repoName),
 		SecretsPath: ".yoink/secrets.enc.yaml",
+	}
+
+	// Check if .yoink.yaml already exists and has the same config
+	if existingCfg, err := LoadProject(); err == nil {
+		if existingCfg.VaultRepo == cfg.VaultRepo && existingCfg.SecretsPath == cfg.SecretsPath {
+			fmt.Println("ℹ️  Project configuration already exists and is correct")
+		} else {
+			// Update the configuration
+			fmt.Println("🔄 Updating project configuration...")
+		}
 	}
 
 	// Ensure the vault repository exists
@@ -77,34 +93,50 @@ func InitProject() error {
 	return nil
 }
 
+func getCurrentGitHubUser() (string, error) {
+	// Try to get username from gh CLI
+	cmd := exec.Command("gh", "api", "user", "--jq", ".login")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("please authenticate with 'gh auth login' first")
+	}
+
+	username := strings.TrimSpace(string(output))
+	if username == "" {
+		return "", fmt.Errorf("could not determine GitHub username")
+	}
+
+	return username, nil
+}
+
 func LoadProject() (ProjectConfig, error) {
 	var c ProjectConfig
-	
+
 	// Try to find .yoink.yaml in current directory or parent directories
 	configPath, err := findProjectConfig()
 	if err != nil {
 		return c, err
 	}
-	
+
 	b, err := os.ReadFile(configPath)
 	if err != nil {
 		return c, fmt.Errorf("not in a yoink project (run 'yoink vault-init' first)")
 	}
-	
+
 	if err := yaml.Unmarshal(b, &c); err != nil {
 		return c, err
 	}
-	
+
 	if c.SecretsPath == "" {
 		c.SecretsPath = ".yoink/secrets.enc.yaml"
 	}
-	
+
 	// Make path relative to config location
 	configDir := filepath.Dir(configPath)
 	if !filepath.IsAbs(c.SecretsPath) {
 		c.SecretsPath = filepath.Join(configDir, c.SecretsPath)
 	}
-	
+
 	return c, nil
 }
 
@@ -113,14 +145,14 @@ func findProjectConfig() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	
+
 	dir := currentDir
 	for {
 		configPath := filepath.Join(dir, ".yoink.yaml")
 		if util.FileExists(configPath) {
 			return configPath, nil
 		}
-		
+
 		parent := filepath.Dir(dir)
 		if parent == dir {
 			// Reached root directory
@@ -128,7 +160,7 @@ func findProjectConfig() (string, error) {
 		}
 		dir = parent
 	}
-	
+
 	return "", fmt.Errorf(".yoink.yaml not found")
 }
 
@@ -201,6 +233,6 @@ func GetVaultDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	
+
 	return filepath.Dir(cfg.SecretsPath), nil
 }

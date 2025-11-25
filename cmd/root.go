@@ -38,8 +38,8 @@ func buildRoot() *cobra.Command {
 		Short: "Yoink — a Git-native secret manager",
 		Long:  "Yoink manages encrypted secrets using SOPS and GitHub without any backend service.",
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			// Skip dependency check for version and help commands
-			if cmd.Name() == "version" || cmd.Name() == "help" {
+			// Skip dependency check for version, help, and reset commands
+			if cmd.Name() == "version" || cmd.Name() == "help" || cmd.Name() == "reset" || cmd.Name() == "vault-reset" {
 				return nil
 			}
 
@@ -66,6 +66,8 @@ func buildRoot() *cobra.Command {
 		vaultInitCmd(),
 		onboardCmd(),
 		removeUserCmd(),
+		resetCmd(),
+		vaultResetCmd(),
 		versionCmd(),
 	)
 
@@ -78,6 +80,90 @@ func versionCmd() *cobra.Command {
 		Short: "Show version information",
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Printf("yoink version %s\n", version)
+		},
+	}
+}
+
+func resetCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "reset",
+		Short: "Reset global yoink configuration",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if dryRun {
+				fmt.Println("🔍 [DRY RUN] Would reset global configuration")
+				return nil
+			}
+
+			cfgPath, err := config.GetConfigPath()
+			if err != nil {
+				return err
+			}
+
+			keyPath, err := config.GetAgeKeyPath()
+			if err != nil {
+				return err
+			}
+
+			pubPath, err := config.GetAgePublicKeyPath()
+			if err != nil {
+				return err
+			}
+
+			// Remove config file
+			if util.FileExists(cfgPath) {
+				os.Remove(cfgPath)
+				fmt.Printf("🗑️  Removed config: %s\n", cfgPath)
+			}
+
+			// Remove age keys
+			if util.FileExists(keyPath) {
+				os.Remove(keyPath)
+				fmt.Printf("🗑️  Removed age key: %s\n", keyPath)
+			}
+
+			if util.FileExists(pubPath) {
+				os.Remove(pubPath)
+				fmt.Printf("🗑️  Removed public key: %s\n", pubPath)
+			}
+
+			fmt.Println("✅ Global configuration reset complete")
+			fmt.Println("💡 Run 'yoink init' to set up again")
+			return nil
+		},
+	}
+}
+
+func vaultResetCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "vault-reset",
+		Short: "Reset project vault configuration",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if dryRun {
+				fmt.Println("🔍 [DRY RUN] Would reset project vault configuration")
+				return nil
+			}
+
+			// Remove .yoink.yaml
+			if util.FileExists(".yoink.yaml") {
+				os.Remove(".yoink.yaml")
+				fmt.Println("🗑️  Removed .yoink.yaml")
+			}
+
+			// Remove .yoink directory
+			if util.FileExists(".yoink") {
+				os.RemoveAll(".yoink")
+				fmt.Println("🗑️  Removed .yoink directory")
+			}
+
+			// Remove .sops.yaml if it exists
+			if util.FileExists(".sops.yaml") {
+				os.Remove(".sops.yaml")
+				fmt.Println("🗑️  Removed .sops.yaml")
+			}
+
+			fmt.Println("✅ Project vault configuration reset complete")
+			fmt.Println("💡 Run 'yoink vault-init' to set up vault again")
+			return nil
 		},
 	}
 }
@@ -95,6 +181,11 @@ func initCmd() *cobra.Command {
 			}
 
 			if err := config.InitConfig(); err != nil {
+				// If config already exists, just inform the user
+				if os.IsExist(err) {
+					fmt.Println("ℹ️  Global configuration already exists")
+					return nil
+				}
 				return err
 			}
 
